@@ -11,17 +11,30 @@
 
 local M = {}
 
+local tone_map = {
+    ["ā"] = "a", ["á"] = "a", ["ǎ"] = "a", ["à"] = "a",
+    ["ō"] = "o", ["ó"] = "o", ["ǒ"] = "o", ["ò"] = "o",
+    ["ē"] = "e", ["é"] = "e", ["ě"] = "e", ["è"] = "e",
+    ["ī"] = "i", ["í"] = "i", ["ǐ"] = "i", ["ì"] = "i",
+    ["ū"] = "u", ["ú"] = "u", ["ǔ"] = "u", ["ù"] = "u",
+    ["ǖ"] = "v", ["ǘ"] = "v", ["ǚ"] = "v", ["ǜ"] = "v", ["ü"] = "v",
+}
+
+local function compact_code(code)
+    code = code:gsub(utf8.charpattern, function(char)
+        return tone_map[char] or char
+    end)
+    return code:gsub("[ '`]", "")
+end
+
 function M.init(env)
     local config = env.engine.schema.config
     local delimiter = config:get_string('speller/delimiter')
     env.name_space = env.name_space:gsub('^*', '')
-    -- 是否保持原有注释
-    M.keep_source_comment = config:get_bool(env.name_space .. "/keep_source_comment")
     if delimiter and #delimiter > 0 and delimiter:sub(1,1) ~= ' ' then
         env.delimiter = delimiter:sub(1,1)
     end
-    env.name_space = env.name_space:gsub('^*', '')
-    M.style = config:get_string(env.name_space) or '{comment}'
+    M.style = '{comment}'
     M.corrections = {
         -- 错音
         ["hun dun"] = { text = "馄饨", comment = "hún tun" },
@@ -121,28 +134,67 @@ function M.init(env)
         ["mo xie zuo"] = { text = "魔蝎座", comment = "摩羯(jié)座" },
         ["pi sa"] = { text = "披萨", comment = "比(bǐ)萨" },
     }
+    M.corrections_by_code = {}
+    for code, correction in pairs(M.corrections) do
+        M.corrections_by_code[compact_code(code)] = correction
+    end
+end
+
+-- super_preedit 使用主翻译器的 spelling_hints 作为带调拼音数据。
+-- 未命中纠错时，仅隐藏这些类型的拼音注释；其他 translator 的 comment 默认透传。
+local hidden_comment_types = {
+    phrase = true,
+    sentence = true,
+    user_phrase = true,
+}
+
+local function update_comment(cand, env)
+    local pinyin = cand.comment
+    if not pinyin or #pinyin == 0 then
+        return
+    end
+
+    if env.delimiter then
+        pinyin = pinyin:gsub(env.delimiter, ' ')
+    end
+
+    local genuine = cand:get_genuine()
+    local correction = M.corrections[pinyin] or M.corrections_by_code[compact_code(pinyin)]
+    if not correction then
+        local preedit = genuine.preedit
+        if preedit and #preedit > 0 then
+            correction = M.corrections_by_code[compact_code(preedit)]
+        end
+    end
+    if not correction then
+        local context_input = env.engine.context.input
+        if context_input and #context_input > 0 then
+            correction = M.corrections_by_code[compact_code(context_input)]
+        end
+    end
+    if correction and cand.text == correction.text then
+        local target_comment = '[' .. correction.comment .. ']'
+        genuine.comment = M.style:gsub("{comment}", target_comment)
+
+        local seg = env.engine.context.composition:back()
+        seg.tags = seg.tags + Set({ "correntor" })
+        return
+    end
+
+    if not hidden_comment_types[cand.type] then
+        return
+    end
+
+    if env.engine.context:get_option("tone_display") then
+        genuine.comment = M.style:gsub("{comment}", pinyin)
+    else
+        genuine.comment = ""
+    end
 end
 
 function M.func(input, env)
     for cand in input:iter() do
-        -- cand.comment 是目前输入的词汇的完整拼音
-        local pinyin = cand.comment:match("^［(.-)］$")
-        if pinyin and #pinyin > 0 then
-            if env.delimiter then
-                pinyin = pinyin:gsub(env.delimiter,' ')
-            end
-            local c = M.corrections[pinyin]
-            if c and cand.text == c.text then
-                cand:get_genuine().comment = string.gsub(M.style, "{comment}", c.comment)
-            else
-                -- 20241002 是否保持原本注释；如: 拼音
-                if M.keep_source_comment then
-                    cand:get_genuine().comment = string.gsub(M.style, "{comment}", pinyin)
-                else
-                    cand:get_genuine().comment = ""
-                end
-            end
-        end
+        update_comment(cand, env)
         yield(cand)
     end
 end
