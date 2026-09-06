@@ -6,3 +6,4 @@ customization:
   rime_version: 1.11.2
 patch:
   "style/color_scheme": psionics
+  "style/color_scheme_dark": psionics
