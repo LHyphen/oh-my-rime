@@ -7,6 +7,15 @@ customization:
 patch:
   schema_list:
     - {schema: double_pinyin}
+  # Disable every Rime-internal ASCII (Chinese/English) toggle. Input method
+  # switching is handled at the system level (Squirrel <-> ABC) instead, so no
+  # modifier or Caps Lock key should flip Rime's own ascii_mode.
+  ascii_composer/good_old_caps_lock: false
   ascii_composer/switch_key:
+    Caps_Lock: noop
     Shift_L: noop
     Shift_R: noop
+    Control_L: noop
+    Control_R: noop
+    Alt_L: noop
+    Alt_R: noop
